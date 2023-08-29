@@ -12,7 +12,7 @@ import warnings
 import random
 import cv2
 from collections import namedtuple
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import train_test_split
 from torchvision import transforms
 
 import torch
@@ -27,42 +27,32 @@ warnings.filterwarnings("ignore")
 IMAGE_SIZE = (256, 256)
 
 
-@functools.lru_cache()  # foldのたびに呼ばれるのでメモ化
-def getImageInfoList(fold_num):
-    # dataをfolds分割して返す
+@functools.lru_cache(1)
+def getImageInfoList():
     image_path_list = glob('/content/train/*.png')
     df = pd.read_csv(
         '/content/drive/MyDrive/MyStudy/MySIGNATE/package-classification-comp/data/train.csv')
     df = df.set_index('image_name')
 
     # データを格納するリスト
-    images = []
+    imgs = []
     labels = []
-    train_indices = []
 
     for img_path in image_path_list:
         # 画像読み込み
         img_name = os.path.split(img_path)[-1]  # 画像の名前 'xxxx.png'
-        img = cv2.imread(img_path)  # numpy形式に変換
+        img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = np.array(img)
         label = int(df.loc[img_name, 'label'])
-        images.append(img)
+
+        imgs.append(img)
         labels.append(label)
 
-    skf = StratifiedKFold(n_splits=fold_num, shuffle=True, random_state=1)
-
-    for (train_index, _) in skf.split(images, labels):
-        train_indices.append(train_index)
-
-    return images, labels, train_indices  # 全画像, ラベル, 訓練データのインデックス
+    return imgs, labels
 
 
-ImageInfoTuple = namedtuple('ImageInfoTuple', 'image, label')
-
-
-def image_transform(image, label):
-
-    image = np.array(image)
+def data_transformer(img, label):
 
     image_transformer = transforms.Compose([
         transforms.ToTensor(),
@@ -71,29 +61,32 @@ def image_transform(image, label):
                              (0.2455, 0.2476, 0.2497))  # 全訓練データで標準化
     ])
 
-    image_t = image_transformer(image)
+    image_t = image_transformer(img)
+
     label_t = torch.tensor([not bool(label), bool(label)], dtype=torch.long)
     return image_t, label_t
 
 
 class ImageDataset(Dataset):
-    def __init__(self, fold, fold_num, isTrain=True):
-        images, labels, split_index = getImageInfoList(fold_num)
+    def __init__(self, isTrain=True):
+        imgs, labels = getImageInfoList()
 
         # データをtrain, validで分ける
-        self.imageInfo_list = []
-        for i, (image, label) in enumerate(zip(images, labels)):
-            if isTrain:
-                if i in split_index[fold]:
-                    self.imageInfo_list.append(ImageInfoTuple(image, label))
-            else:
-                if i not in split_index[fold]:
-                    self.imageInfo_list.append(ImageInfoTuple(image, label))
+        trn_imgs, val_imgs, trn_lables, val_labels = train_test_split(
+            imgs, labels, train_size=0.75, stratify=labels, random_state=1)
+
+        if isTrain:
+            self.imgs = trn_imgs
+            self.labels = trn_lables
+        else:
+            self.imgs = val_imgs
+            self.labels = val_labels
 
     def __len__(self):
-        return len(self.imageInfo_list)
+        return len(self.imgs)
 
     def __getitem__(self, ndx):
-        image, label = self.imageInfo_list[ndx]
-        image_t, label_t = image_transform(image, label)
+        img = self.imgs[ndx]
+        label = self.labels[ndx]
+        image_t, label_t = data_transformer(img, label)
         return (image_t, label_t)
