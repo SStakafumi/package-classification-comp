@@ -27,7 +27,7 @@ warnings.filterwarnings("ignore")
 IMAGE_SIZE = (256, 256)
 
 
-@functools.lru_cache(1)
+# @functools.lru_cache(1)
 def getImageInfoList():
     image_path_list = glob('/content/train/*.png')
     df = pd.read_csv(
