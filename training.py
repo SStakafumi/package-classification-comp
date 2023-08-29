@@ -13,8 +13,8 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from util.util import enumerateWithEstimate
-from .dsets import ImageDataset
-from .model import ResNet18Wrapper
+from dsets import ImageDataset
+from model import ResNet18Wrapper
 
 from util.logconf import logging
 
@@ -39,7 +39,7 @@ class TrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=8,
+                            default=16,
                             type=int,
                             )
         parser.add_argument('--resnet-pretrained',
@@ -54,11 +54,11 @@ class TrainingApp:
                             )
         parser.add_argument('--epochs',
                             help='Number of epochs to train for',
-                            default=3,
+                            default=1,
                             type=int,
                             )
         parser.add_argument('--tb-prefix',
-                            default='signate',
+                            default='test',
                             help='Data prefix to use for Weights and Biases',
                             )
         parser.add_argument('--finetune-params',
@@ -219,19 +219,19 @@ class TrainingApp:
                 device=self.device,
             )
 
-        batch_iter = enumerateWithEstimate(
-            val_dl,
-            'E{} Validation'.format(epoch_ndx),
-            start_ndx=val_dl.num_workers,
-        )
-
-        for batch_ndx, batch_tup in batch_iter:
-            self.computeBatchLoss(
-                batch_ndx,
-                batch_tup,
-                val_dl.batch_size,
-                valMetrics_g,
+            batch_iter = enumerateWithEstimate(
+                val_dl,
+                'E{} Validation'.format(epoch_ndx),
+                start_ndx=val_dl.num_workers,
             )
+
+            for batch_ndx, batch_tup in batch_iter:
+                self.computeBatchLoss(
+                    batch_ndx,
+                    batch_tup,
+                    val_dl.batch_size,
+                    valMetrics_g,
+                )
 
         return valMetrics_g.to('cpu')
 
@@ -257,7 +257,7 @@ class TrainingApp:
         metrics_g[METRICS_LABEL_NDX, start_ndx:end_ndx] = label_g[:, 1]
         metrics_g[METRICS_PRED_NDX,
                   start_ndx:end_ndx] = probability_g[:, 1]  # 食料であると予測した確率
-        metrics_g[METRICS_PRED_NDX, start_ndx:end_ndx] = loss_g  # 損失
+        metrics_g[METRICS_LOSS_NDX, start_ndx:end_ndx] = loss_g  # 損失
 
         return loss_g.mean()  # バッチ平均した損失を返す
 
@@ -315,6 +315,7 @@ class TrainingApp:
         log.info((
             "E{} {:8} {loss/all:.4f} loss, "
             + "{correct/all:-5.1f}% correct, "
+            + "{correct/drink:-5.1f}% correct"
             + "{precision:.4f} precision, "
             + "{recall:.4f} recall, "
             + "{f1_score:.4f} f1 score"
