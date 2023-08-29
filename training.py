@@ -314,8 +314,8 @@ class TrainingApp:
 
         log.info((
             "E{} {:8} {loss/all:.4f} loss, "
-            + "{correct/all:-5.1f}% correct, "
-            + "{correct/drink:-5.1f}% correct"
+            + "{correct/all:-5.1f}% correct/all, "
+            + "{correct/drink:-5.1f}% correct/drink, "
             + "{precision:.4f} precision, "
             + "{recall:.4f} recall, "
             + "{f1_score:.4f} f1 score"
