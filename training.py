@@ -10,6 +10,8 @@ import torch.nn as nn
 from torch.optim import SGD
 from torch.utils.data import DataLoader
 
+from torch.utils.tensorboard import SummaryWriter
+
 from util.util import enumerateWithEstimate
 from .dsets import ImageDataset
 from .model import ResNet18Wrapper
@@ -37,7 +39,7 @@ class TrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=16,
+                            default=8,
                             type=int,
                             )
         parser.add_argument('--resnet-pretrained',
@@ -55,8 +57,8 @@ class TrainingApp:
                             default=3,
                             type=int,
                             )
-        parser.add_argument('--wandb-prefix',
-                            default='first_test',
+        parser.add_argument('--tb-prefix',
+                            default='signate',
                             help='Data prefix to use for Weights and Biases',
                             )
         parser.add_argument('--fold-num',
@@ -66,7 +68,7 @@ class TrainingApp:
                             )
         parser.add_argument('--finetune-params',
                             help='Update params when finetuning',
-                            default=[],
+                            default=['resnet18.fc.weight', 'resnet18.fc.bias'],
                             type=list,
                             )
         parser.add_argument('comment',
@@ -77,6 +79,9 @@ class TrainingApp:
 
         self.cli_args = parser.parse_args(sys_argv)
         self.time_str = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
+
+        self.trn_writer = None
+        self.val_writer = None
 
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device('cuda' if self.use_cuda else 'cpu')
@@ -105,6 +110,7 @@ class TrainingApp:
 
     def initOptimizer(self):
         return SGD(self.model.parameters(), lr=1e-3, momentum=0.99)
+        # return Adam(self.model.parameters())
 
     def initTrainDl(self, fold):
         train_ds = ImageDataset(
@@ -142,18 +148,25 @@ class TrainingApp:
 
         return val_dl
 
-    def initWandB(self):
-        pass
+    def initTensorboardWriters(self, fold):
+        if self.trn_writer is None:
+            log_dir = os.path.join(
+                'runs', self.cli_args.tb_prefix, self.time_str)
+
+            self.trn_writer = SummaryWriter(
+                log_dir=log_dir + '-trn_cls-fold-{}'.format(fold) + self.cli_args.comment)
+            self.val_writer = SummaryWriter(
+                log_dir=log_dir + '-val_cls-fold-{}.'.format(fold) + self.cli_args.comment)
 
     def main(self):
         log.info('Starting {}, {}'.format(type(self).__name__, self.cli_args))
-        self.totalFoldTrainSample_count = 0  # foldごとに何個のデータで学習したか
 
         # 交差検証
         for fold in range(self.cli_args.fold_num):
             # DataLoader
             train_dl = self.initTrainDl(fold=fold)
             val_dl = self.initValDl(fold=fold)
+            self.totalFoldTrainSample_count = 0  # foldごとに何個のデータで学習したか
 
             for epoch_ndx in range(1, self.cli_args.epochs+1):
                 # log
@@ -169,9 +182,20 @@ class TrainingApp:
                 # 1epoch内
                 trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
                 # 評価指標を記録
-                self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
+                self.logMetrics(epoch_ndx, 'trn', trnMetrics_t, fold)
+
+                valMetrics_t = self.doValidation(epoch_ndx, val_dl)
+                self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+
+            if hasattr(self, 'trn_writer'):
+                self.trn_writer.close()
+                self.val_writer.close()
+
+            self.trn_writer = None
+            self.val_writer = None
 
     def doTraining(self, epoch_ndx, train_dl):
+        self.model.train()
         trnMetrics_g = torch.zeros(  # 評価マスクを初期化
             METRICS_SIZE,
             len(train_dl.dataset),
@@ -201,6 +225,31 @@ class TrainingApp:
 
         return trnMetrics_g.to('cpu')
 
+    def doValidation(self, epoch_ndx, val_dl):
+        with torch.no_grad():
+            self.model.eval()
+            valMetrics_g = torch.zeros(
+                METRICS_SIZE,
+                len(val_dl.dataset),
+                device=self.device,
+            )
+
+        batch_iter = enumerateWithEstimate(
+            val_dl,
+            'E{} Validation'.format(epoch_ndx),
+            start_ndx=val_dl.num_workers,
+        )
+
+        for batch_ndx, batch_tup in batch_iter:
+            self.computeBatchLoss(
+                batch_ndx,
+                batch_tup,
+                val_dl.batch_size,
+                valMetrics_g,
+            )
+
+        return valMetrics_g.to('cpu')
+
     # 1batchにおける平均損失を計算し、trnMetrics_gを埋める
     def computeBatchLoss(self, batch_ndx, batch_tup, batch_size, metrics_g):
         input_t, label_t = batch_tup  # (image, label)
@@ -226,8 +275,8 @@ class TrainingApp:
 
         return loss_g.mean()  # バッチ平均した損失を返す
 
-    def logMetrics(self, epoch_ndx, mode_str, metrics_t, classificationThreshold=0.5,):
-        self.initWandB()
+    def logMetrics(self, epoch_ndx, mode_str, metrics_t, fold, classificationThreshold=0.5,):
+        self.initTensorboardWriters(fold)
 
         log.info('E{} {}'.format(
             epoch_ndx,
@@ -288,6 +337,37 @@ class TrainingApp:
             mode_str,
             **metrics_dict,
         ))
+
+        writer = getattr(self, mode_str+'_writer')
+        for key, value in metrics_dict.items():
+            writer.add_scalar(key, value, self.totalFoldTrainSample_count)
+
+        writer.add_pr_curve(
+            'pr',
+            metrics_t[METRICS_LABEL_NDX],
+            metrics_t[METRICS_PRED_NDX],
+            self.totalFoldTrainSample_count,
+        )
+
+        # bins = [x/50.0 for x in range(51)]
+
+        # negHist_mask = drinkLabel_mask & (metrics_t[METRICS_PRED_NDX] > 0.01)
+        # posHist_mask = foodLabel_mask & (metrics_t[METRICS_PRED_NDX] < 0.99)
+
+        # if negHist_mask.any():
+        #     writer.add_histogram(
+        #         'is_neg',
+        #         metrics_t[METRICS_PRED_NDX, negHist_mask],
+        #         self.totalFoldTrainingSamples_count,
+        #         bins=bins,
+        #     )
+        # if posHist_mask.any():
+        #     writer.add_histogram(
+        #         'is_pos',
+        #         metrics_t[METRICS_PRED_NDX, posHist_mask],
+        #         self.totalFoldTrainingSamples_count,
+        #         bins=bins,
+        #     )
 
 
 if __name__ == '__main__':
