@@ -60,6 +60,22 @@ def getImageInfoList(fold_num):
 ImageInfoTuple = namedtuple('ImageInfoTuple', 'image, label')
 
 
+def image_transform(image, label):
+
+    image = np.array(image)
+
+    image_transformer = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize(IMAGE_SIZE),
+        transforms.Normalize((0.5433, 0.4686, 0.4039),
+                             (0.2455, 0.2476, 0.2497))  # 全訓練データで標準化
+    ])
+
+    image_t = image_transformer(image)
+    label_t = torch.tensor([not bool(label), bool(label)], dtype=torch.long)
+    return image_t, label_t
+
+
 class ImageDataset(Dataset):
     def __init__(self, fold, fold_num, isTrain=True):
         images, labels, split_index = getImageInfoList(fold_num)
@@ -74,26 +90,10 @@ class ImageDataset(Dataset):
                 if i not in split_index[fold]:
                     self.imageInfo_list.append(ImageInfoTuple(image, label))
 
-    def image_transform(image, label):
-
-        print(type(image))
-
-        image_transformer = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize(IMAGE_SIZE),
-            transforms.Normalize((0.5433, 0.4686, 0.4039),
-                                 (0.2455, 0.2476, 0.2497))  # 全訓練データで標準化
-        ])
-
-        image_t = image_transformer(image)
-        image_t = image_t.unsqueeze(0)
-        label_t = torch.tensor([not bool(label), bool(label)])
-        return image_t, label_t
-
     def __len__(self):
         return len(self.imageInfo_list)
 
     def __getitem__(self, ndx):
-        imageInfo_tup = self.imageInfo_list[ndx]
-        image_t, label_t = self.image_transform(imageInfo_tup)
+        image, label = self.imageInfo_list[ndx]
+        image_t, label_t = image_transform(image, label)
         return (image_t, label_t)
