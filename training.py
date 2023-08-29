@@ -61,11 +61,6 @@ class TrainingApp:
                             default='signate',
                             help='Data prefix to use for Weights and Biases',
                             )
-        parser.add_argument('--fold-num',
-                            help='Closs validation fold num',
-                            default=4,
-                            type=int,
-                            )
         parser.add_argument('--finetune-params',
                             help='Update params when finetuning',
                             default=['resnet18.fc.weight', 'resnet18.fc.bias'],
@@ -82,6 +77,7 @@ class TrainingApp:
 
         self.trn_writer = None
         self.val_writer = None
+        self.totalTrainingSamples_count = 0
 
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device('cuda' if self.use_cuda else 'cpu')
@@ -102,20 +98,20 @@ class TrainingApp:
                     param.required_grad = False
 
         if self.use_cuda:
-            # log.info('Using CUDA; {} devices'.format(torch.cuda.device_count()))
+            log.info('Using CUDA; {} devices'.format(
+                torch.cuda.device_count()))
             if torch.cuda.device_count() > 1:
                 model = nn.DataParallel(model)
             model = model.to(self.device)
+
         return model
 
     def initOptimizer(self):
         return SGD(self.model.parameters(), lr=1e-3, momentum=0.99)
         # return Adam(self.model.parameters())
 
-    def initTrainDl(self, fold):
-        train_ds = ImageDataset(
-            fold, fold_num=self.cli_args.fold_num, isTrain=True)
-
+    def initTrainDl(self):
+        train_ds = ImageDataset(isTrain=True)
         batch_size = self.cli_args.batch_size
 
         if self.use_cuda:
@@ -130,10 +126,8 @@ class TrainingApp:
 
         return train_dl
 
-    def initValDl(self, fold):
-        val_ds = ImageDataset(
-            fold, fold_num=self.cli_args.fold_num, isTrain=False)
-
+    def initValDl(self):
+        val_ds = ImageDataset(isTrain=False)
         batch_size = self.cli_args.batch_size
 
         if self.use_cuda:
@@ -148,58 +142,49 @@ class TrainingApp:
 
         return val_dl
 
-    def initTensorboardWriters(self, fold):
+    def initTensorboardWriters(self):
         if self.trn_writer is None:
             log_dir = os.path.join(
                 'runs', self.cli_args.tb_prefix, self.time_str)
 
             self.trn_writer = SummaryWriter(
-                log_dir=log_dir + '-trn_cls-fold-{}'.format(fold) + self.cli_args.comment)
+                log_dir=log_dir + '-trn_cls' + self.cli_args.comment)
             self.val_writer = SummaryWriter(
-                log_dir=log_dir + '-val_cls-fold-{}.'.format(fold) + self.cli_args.comment)
+                log_dir=log_dir + '-val_cls' + self.cli_args.comment)
 
     def main(self):
         log.info('Starting {}, {}'.format(type(self).__name__, self.cli_args))
 
-        # 交差検証
-        for fold in range(self.cli_args.fold_num):
-            # DataLoader
-            train_dl = self.initTrainDl(fold=fold)
-            val_dl = self.initValDl(fold=fold)
-            self.totalFoldTrainSample_count = 0  # foldごとに何個のデータで学習したか
+        train_dl = self.initTrainDl()
+        val_dl = self.initValDl()
 
-            for epoch_ndx in range(1, self.cli_args.epochs+1):
-                # log
-                log.info("Epoch {} of {}, {}/{} batches of size {}*{}".format(
-                    epoch_ndx,
-                    self.cli_args.epochs,
-                    len(train_dl),
-                    len(val_dl),
-                    self.cli_args.batch_size,
-                    (torch.cuda.device_count() if self.use_cuda else 1),
-                ))
+        for epoch_ndx in range(1, self.cli_args.epochs+1):
+            # log
+            log.info("Epoch {} of {}, {}/{} batches of size {}*{}".format(
+                epoch_ndx,
+                self.cli_args.epochs,
+                len(train_dl),
+                len(val_dl),
+                self.cli_args.batch_size,
+                (torch.cuda.device_count() if self.use_cuda else 1),
+            ))
 
-                # 1epoch内
-                trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
-                # 評価指標を記録
-                self.logMetrics(epoch_ndx, 'trn', trnMetrics_t, fold)
+            trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
+            self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
 
-                valMetrics_t = self.doValidation(epoch_ndx, val_dl)
-                self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+            valMetrics_t = self.doValidation(epoch_ndx, val_dl)
+            self.logMetrics(epoch_ndx, 'val', valMetrics_t)
 
-            if hasattr(self, 'trn_writer'):
-                self.trn_writer.close()
-                self.val_writer.close()
-
-            self.trn_writer = None
-            self.val_writer = None
+        if hasattr(self, 'trn_writer'):
+            self.trn_writer.close()
+            self.val_writer.close()
 
     def doTraining(self, epoch_ndx, train_dl):
         self.model.train()
         trnMetrics_g = torch.zeros(  # 評価マスクを初期化
             METRICS_SIZE,
             len(train_dl.dataset),
-            device=self.device
+            device=self.device,
         )
 
         batch_iter = enumerateWithEstimate(
@@ -221,7 +206,7 @@ class TrainingApp:
             loss_var.backward()
             self.optimizer.step()
 
-        self.totalFoldTrainSample_count += len(train_dl.dataset)
+        self.totalTrainingSamples_count += len(train_dl.dataset)
 
         return trnMetrics_g.to('cpu')
 
@@ -257,7 +242,8 @@ class TrainingApp:
         input_g = input_t.to(self.device, non_blocking=True)  # 新しくGPUに領域作る
         label_g = label_t.to(self.device, non_blocking=True)
 
-        logits_g, probability_g = self.model(input_g)  # Linear, Softmax
+        logits_g, probability_g = self.model(input_g)  # fc, Softmax
+
         loss_func = nn.CrossEntropyLoss(reduction='none')
         loss_g = loss_func(
             logits_g,
@@ -275,8 +261,8 @@ class TrainingApp:
 
         return loss_g.mean()  # バッチ平均した損失を返す
 
-    def logMetrics(self, epoch_ndx, mode_str, metrics_t, fold, classificationThreshold=0.5,):
-        self.initTensorboardWriters(fold)
+    def logMetrics(self, epoch_ndx, mode_str, metrics_t, classificationThreshold=0.5):
+        self.initTensorboardWriters()
 
         log.info('E{} {}'.format(
             epoch_ndx,
@@ -339,14 +325,15 @@ class TrainingApp:
         ))
 
         writer = getattr(self, mode_str+'_writer')
+
         for key, value in metrics_dict.items():
-            writer.add_scalar(key, value, self.totalFoldTrainSample_count)
+            writer.add_scalar(key, value, self.totalTrainingSamples_count)
 
         writer.add_pr_curve(
             'pr',
             metrics_t[METRICS_LABEL_NDX],
             metrics_t[METRICS_PRED_NDX],
-            self.totalFoldTrainSample_count,
+            self.totalTrainingSamples_count,
         )
 
         # bins = [x/50.0 for x in range(51)]
@@ -358,14 +345,14 @@ class TrainingApp:
         #     writer.add_histogram(
         #         'is_neg',
         #         metrics_t[METRICS_PRED_NDX, negHist_mask],
-        #         self.totalFoldTrainingSamples_count,
+        #         self.totalTrainingSamples_count,
         #         bins=bins,
         #     )
         # if posHist_mask.any():
         #     writer.add_histogram(
         #         'is_pos',
         #         metrics_t[METRICS_PRED_NDX, posHist_mask],
-        #         self.totalFoldTrainingSamples_count,
+        #         self.totalTrainingSamples_count,
         #         bins=bins,
         #     )
 
