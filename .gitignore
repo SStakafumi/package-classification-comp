@@ -161,4 +161,4 @@ cython_debug/
 
 # my_setting
 data/
-run/
+runs/
