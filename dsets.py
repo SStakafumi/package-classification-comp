@@ -89,4 +89,5 @@ class ImageDataset(Dataset):
         img = self.imgs[ndx]
         label = self.labels[ndx]
         image_t, label_t = data_transformer(img, label)
+
         return (image_t, label_t)
