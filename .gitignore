@@ -161,4 +161,5 @@ cython_debug/
 
 # my_setting
 data/
-runs/
+vis/
+my_note.ipynb
