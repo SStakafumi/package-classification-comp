@@ -58,7 +58,7 @@ def data_transformer(img, label):
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
         transforms.Normalize((0.5433, 0.4686, 0.4039),
-                             (0.2455, 0.2476, 0.2497))  # 全訓練データで標準化
+                             (0.2455, 0.2476, 0.2497))  # 全データで標準化
     ])
 
     image_t = image_transformer(img)

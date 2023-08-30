@@ -2,6 +2,8 @@ import argparse
 import datetime
 import os
 import sys
+import shutil
+import hashlib
 
 import numpy as np
 
@@ -9,6 +11,8 @@ import torch
 import torch.nn as nn
 from torch.optim import SGD
 from torch.utils.data import DataLoader
+
+from sklearn.metrics import roc_auc_score
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -42,7 +46,7 @@ class TrainingApp:
                             default=16,
                             type=int,
                             )
-        parser.add_argument('--resnet-pretrained',
+        parser.add_argument('--pretrained',
                             help='pretrain resnet model or not.',
                             default=True,
                             type=bool,
@@ -57,7 +61,7 @@ class TrainingApp:
                             default=1,
                             type=int,
                             )
-        parser.add_argument('--tb-prefix',
+        parser.add_argument('--prefix',
                             default='test',
                             help='Data prefix to use for Weights and Biases',
                             )
@@ -66,10 +70,20 @@ class TrainingApp:
                             default=['resnet18.fc.weight', 'resnet18.fc.bias'],
                             type=list,
                             )
+        parser.add_argument('--validation-cadence',  # valの間隔 (単位: epoch)
+                            help='Interval at which verification is performed',
+                            default=1,
+                            type=int,
+                            )
+        parser.add_argument('--learning-rate',
+                            help='model optimizer learning rate',
+                            default=1e-3,
+                            type=float,
+                            )
         parser.add_argument('comment',
                             help='Comment suffix for wandb run.',
                             nargs='?',
-                            default='signate-comp',
+                            default='SIGNATE',
                             )
 
         self.cli_args = parser.parse_args(sys_argv)
@@ -88,7 +102,7 @@ class TrainingApp:
     def initModel(self):
         model = ResNet18Wrapper(
             in_channels=3,
-            pretrained=self.cli_args.resnet_pretrained,
+            pretrained=self.cli_args.pretrained,
         )
 
         # Fine tune : もしファインチューニングするパラメータが配列要素にあったら, そのパラメータ以外の重みの更新をOFF
@@ -107,7 +121,7 @@ class TrainingApp:
         return model
 
     def initOptimizer(self):
-        return SGD(self.model.parameters(), lr=1e-3, momentum=0.99)
+        return SGD(self.model.parameters(), lr=self.cli_args.learning_rate, momentum=0.99)
         # return Adam(self.model.parameters())
 
     def initTrainDl(self):
@@ -145,7 +159,7 @@ class TrainingApp:
     def initTensorboardWriters(self):
         if self.trn_writer is None:
             log_dir = os.path.join(
-                'runs', self.cli_args.tb_prefix, self.time_str)
+                'vis', self.cli_args.prefix, self.time_str)
 
             self.trn_writer = SummaryWriter(
                 log_dir=log_dir + '-trn_cls' + self.cli_args.comment)
@@ -157,6 +171,9 @@ class TrainingApp:
 
         train_dl = self.initTrainDl()
         val_dl = self.initValDl()
+
+        best_score = 0.0
+        self.validation_cadence = self.cli_args.validation_cadence
 
         for epoch_ndx in range(1, self.cli_args.epochs+1):
             # log
@@ -172,8 +189,13 @@ class TrainingApp:
             trnMetrics_t = self.doTraining(epoch_ndx, train_dl)
             self.logMetrics(epoch_ndx, 'trn', trnMetrics_t)
 
-            valMetrics_t = self.doValidation(epoch_ndx, val_dl)
-            self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+            if epoch_ndx == 1 or epoch_ndx % self.validation_cadence == 0:
+                # if val is wanted
+                valMetrics_t = self.doValidation(epoch_ndx, val_dl)
+                score = self.logMetrics(epoch_ndx, 'val', valMetrics_t)
+                best_score = max(score, best_score)  # AUC
+
+                self.saveModel(epoch_ndx, score == best_score)
 
         if hasattr(self, 'trn_writer'):
             self.trn_writer.close()
@@ -181,7 +203,7 @@ class TrainingApp:
 
     def doTraining(self, epoch_ndx, train_dl):
         self.model.train()
-        trnMetrics_g = torch.zeros(  # 評価マスクを初期化
+        trnMetrics_g = torch.zeros(  # initialize metirics mask
             METRICS_SIZE,
             len(train_dl.dataset),
             device=self.device,
@@ -294,10 +316,15 @@ class TrainingApp:
         metrics_dict = {}
         # 1epochの全データの損失
         metrics_dict['loss/all'] = metrics_t[METRICS_LOSS_NDX].mean()
+        # 飲料データの損失
         metrics_dict['loss/drink'] = metrics_t[METRICS_LOSS_NDX,
-                                               drinkLabel_mask].mean()  # 飲料データの損失
+                                               drinkLabel_mask].mean()
+        # 食料データの損失
         metrics_dict['loss/food'] = metrics_t[METRICS_LOSS_NDX,
-                                              foodLabel_mask].mean()  # 食料データの損失
+                                              foodLabel_mask].mean()
+        # AUC
+        metrics_dict['AUC'] = roc_auc_score(
+            (metrics_t[METRICS_LABEL_NDX]).detach().numpy().copy(), metrics_t[METRICS_PRED_NDX].detach().numpy().copy())
         # 全データのうち正しく分類できた割合
         metrics_dict['correct/all'] = (neg_correct +
                                        pos_correct) / metrics_t.shape[1] * 100
@@ -316,6 +343,7 @@ class TrainingApp:
             "E{} {:8} {loss/all:.4f} loss, "
             + "{correct/all:-5.1f}% correct/all, "
             + "{correct/drink:-5.1f}% correct/drink, "
+            + "{AUC:.4f} AUC, "
             + "{precision:.4f} precision, "
             + "{recall:.4f} recall, "
             + "{f1_score:.4f} f1 score"
@@ -356,6 +384,55 @@ class TrainingApp:
         #         self.totalTrainingSamples_count,
         #         bins=bins,
         #     )
+
+        return metrics_dict['AUC']
+
+    def saveModel(self, epoch_ndx, isBest=False):
+        file_path = os.path.join(
+            'models',
+            self.cli_args.prefix,
+            '{}_{}_{}.state'.format(
+                self.time_str,  # 学習開始時間
+                self.cli_args.comment,  # defatult: SIGNATE
+                self.totalTrainingSamples_count,  # 全学習データ数
+            )
+        )
+
+        os.makedirs(os.path.dirname(file_path), mode=0o755, exist_ok=True)
+
+        model = self.model
+        if isinstance(model, torch.nn.DataParallel):
+            model = model.module
+
+        # 保存データ
+        state = {
+            'sys_argv': sys.argv,
+            'time': str(datetime.datetime.now()),
+            'model_state': model.state_dict(),  # parameter
+            'optimizer_state': self.optimizer.state_dict(),
+            'optimizer_name': type(self.optimizer).__name__,
+            'epoch': epoch_ndx,
+            'totalTrainingSamples_count': self.totalTrainingSamples_count,
+        }
+
+        # 保存
+        torch.save(state, file_path)
+
+        log.info('Saved model params to {}'.format(file_path))
+
+        if isBest:
+            best_path = os.path.join(
+                'models',
+                self.cli_args.prefix,
+                f'{self.time_str}_{self.cli_args.comment}.best.state'
+            )
+            # bestなパラメータをコピーして上書き保存
+            shutil.copyfile(file_path, best_path)
+
+            log.info('Saved model params to {}'.format(best_path))
+
+        with open(file_path, 'rb') as f:
+            log.info('SHA1: ' + hashlib.sha1(f.read()).hexdigest())
 
 
 if __name__ == '__main__':
