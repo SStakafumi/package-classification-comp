@@ -8,7 +8,7 @@ class ResNet18Wrapper(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
 
-        # batch正規化
+        # Batch normalization
         self.input_batchnorm = nn.BatchNorm2d(
             kwargs['in_channels'])
 
@@ -17,16 +17,22 @@ class ResNet18Wrapper(nn.Module):
         self.resnet18.fc = nn.Linear(
             in_features=512, out_features=2, bias=True)  # 出力チャネル数を1000->2
 
-        # 確率変換
+        # to probability
         self.head_softmax = nn.Softmax(dim=1)
 
-        # 重みの初期化(nn.Linearのみ, ResNetの重みが初期化されちゃう？)
-        # self._init_weights()
+        # initialize weights and bias
+        if kwargs['pretrained'] == False:
+            self._init_weights()
 
     def _init_weights(self):
+        init_set = {
+            nn.Conv2d,
+            nn.ConvTranspose2d,
+            nn.Linear,
+        }
         for m in self.modules():
-            if type(m) == nn.Linear:
-                nn.init.kaiming_nomal_(
+            if type(m) in init_set:
+                nn.init.kaiming_normal_(
                     m.weight.data, a=0, mode='fan_out', nonlinearity='relu',
                 )
                 if m.bias is not None:
