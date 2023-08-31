@@ -43,7 +43,7 @@ class TrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=128,
+                            default=64,
                             type=int,
                             )
         parser.add_argument('--pretrained',
@@ -104,6 +104,8 @@ class TrainingApp:
             in_channels=3,
             pretrained=self.cli_args.pretrained,
         )
+
+        # 作成したモデルに対してファインチューニングするコードの追加
 
         # Fine tune : もしファインチューニングするパラメータが配列要素にあったら, そのパラメータ以外の重みの更新をOFF
         if self.cli_args.finetune_params:
