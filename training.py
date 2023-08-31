@@ -43,7 +43,7 @@ class TrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=16,
+                            default=128,
                             type=int,
                             )
         parser.add_argument('--pretrained',
@@ -67,7 +67,7 @@ class TrainingApp:
                             )
         parser.add_argument('--finetune-params',
                             help='Update params when finetuning',
-                            default=['resnet18.fc.weight', 'resnet18.fc.bias'],
+                            default=[],
                             type=list,
                             )
         parser.add_argument('--validation-cadence',  # valの間隔 (単位: epoch)
@@ -77,7 +77,7 @@ class TrainingApp:
                             )
         parser.add_argument('--learning-rate',
                             help='model optimizer learning rate',
-                            default=1e-3,
+                            default=1e-4,
                             type=float,
                             )
         parser.add_argument('comment',
@@ -125,7 +125,7 @@ class TrainingApp:
         # return Adam(self.model.parameters())
 
     def initTrainDl(self):
-        train_ds = ImageDataset(isTrain=True)
+        train_ds = ImageDataset(dataType='trn')
         batch_size = self.cli_args.batch_size
 
         if self.use_cuda:
@@ -141,7 +141,7 @@ class TrainingApp:
         return train_dl
 
     def initValDl(self):
-        val_ds = ImageDataset(isTrain=False)
+        val_ds = ImageDataset(dataType='val')
         batch_size = self.cli_args.batch_size
 
         if self.use_cuda:
