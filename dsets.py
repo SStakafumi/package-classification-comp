@@ -14,20 +14,23 @@ import cv2
 from collections import namedtuple
 from sklearn.model_selection import train_test_split
 from torchvision import transforms
+from PIL import Image
 
 import torch
 import torch.cuda
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from torch import nn as nn
 
 random.seed(1)
 warnings.filterwarnings("ignore")
 
 IMAGE_SIZE = (256, 256)
+TRAIN_DATA_SIZE = int(1632*10)  # 2176 * 0.75 * 10
 
 
 # @functools.lru_cache(1)
-def getTrainImageInfoList():
+def getTrainValImageInfoList():
     img_path_list = glob('/content/train/*.png')
     df = pd.read_csv(
         '/content/drive/MyDrive/MyStudy/MySIGNATE/package-classification-comp/data/train.csv')
@@ -40,6 +43,7 @@ def getTrainImageInfoList():
     for img_path in img_path_list:
         # 画像読み込み
         img_name = os.path.split(img_path)[-1]  # 'xxxx.png'
+        # img = Image.open(img_path)
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = np.array(img)
@@ -60,7 +64,7 @@ def getTestImageInfoList():
 
     for img_path in img_path_list:
         # 画像読み込み
-        img_name = os.path.split(img_path)[-1]
+        # img = Image.open(img_path)
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = np.array(img)
@@ -75,8 +79,36 @@ def trainData_transformer(img, label):
     img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
-        transforms.Normalize((0.5433, 0.4686, 0.4039),
-                             (0.2455, 0.2476, 0.2497))  # 全データで標準化
+        # transforms.Normalize((0.5433, 0.4686, 0.4039),
+        #                      (0.2455, 0.2476, 0.2497))  # 全データで標準化
+
+        # transforms.AutoAugment(),
+        transforms.RandomAffine(
+            degrees=[-180, 180], translate=(0.1, 0.1), scale=(0.8, 1.2)
+        ),
+        transforms.RandomApply(
+            nn.ModuleList([
+                # transforms.ColorJitter(),
+                transforms.GaussianBlur(kernel_size=11),
+            ]),
+            p=0.2
+        ),
+
+    ])
+
+    img_t = img_transformer(img)
+
+    label_t = torch.tensor([not bool(label), bool(label)], dtype=torch.long)
+    return img_t, label_t
+
+
+def valData_transformer(img, label):
+
+    img_transformer = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize(IMAGE_SIZE),
+        # transforms.Normalize((0.5433, 0.4686, 0.4039),
+        #                      (0.2455, 0.2476, 0.2497))  # 全データで標準化
     ])
 
     img_t = img_transformer(img)
@@ -90,8 +122,8 @@ def testData_transformer(img):
     img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
-        transforms.Normalize((0.5486, 0.4778, 0.4198),
-                             (0.2418, 0.2470, 0.2510))  # 全データで標準化
+        # transforms.Normalize((0.5486, 0.4778, 0.4198),
+        #                      (0.2418, 0.2470, 0.2510))  # 全データで標準化
     ])
 
     img_t = img_transformer(img)
@@ -105,7 +137,7 @@ class ImageDataset(Dataset):
         self.dataType = dataType
 
         if dataType in ['trn', 'val']:
-            imgs, labels = getTrainImageInfoList()
+            imgs, labels = getTrainValImageInfoList()
 
             # データをtrain, validで分ける
             trn_imgs, val_imgs, trn_lables, val_labels = train_test_split(
@@ -124,22 +156,33 @@ class ImageDataset(Dataset):
             self.imgs = imgs
 
     def __len__(self):
-        return len(self.imgs)
+        if self.dataType == 'trn':
+            return TRAIN_DATA_SIZE
+            # return len(self.imgs)
+        else:
+            return len(self.imgs)
 
     def __getitem__(self, ndx):
-        if self.dataType in ['trn', 'val']:
-
-            img = self.imgs[ndx]
-            label = self.labels[ndx]
+        if self.dataType == 'trn':
+            img = self.imgs[ndx % len(self.imgs)]
+            label = self.labels[ndx % len(self.imgs)]
             img_t, label_t = trainData_transformer(img, label)
 
             return (img_t, label_t)
 
-        elif self.dataType == 'test':
-
+        elif self.dataType == 'val':
             img = self.imgs[ndx]
+            label = self.labels[ndx]
+            img_t, label_t = valData_transformer(img, label)
+
+            return (img_t, label_t)
+
+        elif self.dataType == 'test':
+            img = self.imgs[ndx]
+            img_name = self.imgs_name[ndx]
             img_t = testData_transformer(img)
 
-            img_name = self.imgs_name[ndx]
-
             return (img_t, img_name)
+
+        else:
+            print('dataType must be trn, val or test.')
