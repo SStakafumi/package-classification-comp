@@ -160,8 +160,13 @@ cython_debug/
 #.idea/
 
 # my_setting
-data/
-vis/
-models/
-work/
+data/*
+work/*
+models/*
+vis/*
 my_note.ipynb
+
+!data/dataset_definition.md
+!work/resnet18-alltrain-E_30-lr-1e-4-valcad_5--2023-08-30_10.19.42_SIGNATE_8160.csv
+!models/resnet18-finetune_fc-E_30-lr_1e-5_valcad_5/
+!vis/resnet18-alltrain-E_30-lr-1e-4-valcad_5/
