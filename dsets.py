@@ -21,15 +21,14 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 random.seed(1)
-
 warnings.filterwarnings("ignore")
 
 IMAGE_SIZE = (256, 256)
 
 
 # @functools.lru_cache(1)
-def getImageInfoList():
-    image_path_list = glob('/content/train/*.png')
+def getTrainImageInfoList():
+    img_path_list = glob('/content/train/*.png')
     df = pd.read_csv(
         '/content/drive/MyDrive/MyStudy/MySIGNATE/package-classification-comp/data/train.csv')
     df = df.set_index('image_name')
@@ -38,9 +37,9 @@ def getImageInfoList():
     imgs = []
     labels = []
 
-    for img_path in image_path_list:
+    for img_path in img_path_list:
         # 画像読み込み
-        img_name = os.path.split(img_path)[-1]  # 画像の名前 'xxxx.png'
+        img_name = os.path.split(img_path)[-1]  # 'xxxx.png'
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = np.array(img)
@@ -52,42 +51,95 @@ def getImageInfoList():
     return imgs, labels
 
 
-def data_transformer(img, label):
+def getTestImageInfoList():
+    img_path_list = glob('/content/test/*.png')
+    imgs_name = [os.path.split(p)[-1]
+                 for p in img_path_list]  # imgs name list
 
-    image_transformer = transforms.Compose([
+    imgs = []
+
+    for img_path in img_path_list:
+        # 画像読み込み
+        img_name = os.path.split(img_path)[-1]
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = np.array(img)
+
+        imgs.append(img)
+
+    return imgs, imgs_name  # 順番通り
+
+
+def trainData_transformer(img, label):
+
+    img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
         transforms.Normalize((0.5433, 0.4686, 0.4039),
                              (0.2455, 0.2476, 0.2497))  # 全データで標準化
     ])
 
-    image_t = image_transformer(img)
+    img_t = img_transformer(img)
 
     label_t = torch.tensor([not bool(label), bool(label)], dtype=torch.long)
-    return image_t, label_t
+    return img_t, label_t
+
+
+def testData_transformer(img):
+
+    img_transformer = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize(IMAGE_SIZE),
+        transforms.Normalize((0.5486, 0.4778, 0.4198),
+                             (0.2418, 0.2470, 0.2510))  # 全データで標準化
+    ])
+
+    img_t = img_transformer(img)
+
+    return img_t
 
 
 class ImageDataset(Dataset):
-    def __init__(self, isTrain=True):
-        imgs, labels = getImageInfoList()
+    def __init__(self, dataType):
 
-        # データをtrain, validで分ける
-        trn_imgs, val_imgs, trn_lables, val_labels = train_test_split(
-            imgs, labels, train_size=0.75, stratify=labels, random_state=1)
+        self.dataType = dataType
 
-        if isTrain:
-            self.imgs = trn_imgs
-            self.labels = trn_lables
-        else:
-            self.imgs = val_imgs
-            self.labels = val_labels
+        if dataType in ['trn', 'val']:
+            imgs, labels = getTrainImageInfoList()
+
+            # データをtrain, validで分ける
+            trn_imgs, val_imgs, trn_lables, val_labels = train_test_split(
+                imgs, labels, train_size=0.75, stratify=labels, random_state=1)
+
+            if dataType == 'trn':
+                self.imgs = trn_imgs
+                self.labels = trn_lables
+            else:
+                self.imgs = val_imgs
+                self.labels = val_labels
+
+        elif dataType == 'test':
+            imgs, imgs_name = getTestImageInfoList()
+            self.imgs_name = imgs_name
+            self.imgs = imgs
 
     def __len__(self):
         return len(self.imgs)
 
     def __getitem__(self, ndx):
-        img = self.imgs[ndx]
-        label = self.labels[ndx]
-        image_t, label_t = data_transformer(img, label)
+        if self.dataType in ['trn', 'val']:
 
-        return (image_t, label_t)
+            img = self.imgs[ndx]
+            label = self.labels[ndx]
+            img_t, label_t = trainData_transformer(img, label)
+
+            return (img_t, label_t)
+
+        elif self.dataType == 'test':
+
+            img = self.imgs[ndx]
+            img_t = testData_transformer(img)
+
+            img_name = self.imgs_name[ndx]
+
+            return (img_t, img_name)
