@@ -1,7 +1,8 @@
 import math
 
 from torch import nn as nn
-from torchvision.models import resnet18
+# from torchvision.models import resnet18 # dropout なし
+from resnet_dropout import resnet18  # dropout あり
 
 
 class ResNet18Wrapper(nn.Module):
