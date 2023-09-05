@@ -25,7 +25,7 @@ from torch import nn as nn
 random.seed(1)
 warnings.filterwarnings("ignore")
 
-IMAGE_SIZE = (256, 256)
+IMAGE_SIZE = (224, 224)
 TRAIN_DATA_SIZE = int(1632*10)  # 2176 * 0.75 * 10
 
 
@@ -79,12 +79,12 @@ def trainData_transformer(img, label):
     img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
-        # transforms.Normalize((0.5433, 0.4686, 0.4039),
-        #                      (0.2455, 0.2476, 0.2497))  # 全データで標準化
+        transforms.Normalize((0.5433, 0.4686, 0.4039),
+                             (0.2455, 0.2476, 0.2497)),  # 全データで標準化
 
         # transforms.AutoAugment(),
         transforms.RandomAffine(
-            degrees=[-180, 180], translate=(0.1, 0.1), scale=(0.8, 1.2)
+            degrees=[-10, 10], translate=(0.1, 0.1), scale=(0.8, 1.2)
         ),
         transforms.RandomApply(
             nn.ModuleList([
@@ -107,8 +107,8 @@ def valData_transformer(img, label):
     img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
-        # transforms.Normalize((0.5433, 0.4686, 0.4039),
-        #                      (0.2455, 0.2476, 0.2497))  # 全データで標準化
+        transforms.Normalize((0.5433, 0.4686, 0.4039),
+                             (0.2455, 0.2476, 0.2497))  # 全データで標準化
     ])
 
     img_t = img_transformer(img)
@@ -122,8 +122,8 @@ def testData_transformer(img):
     img_transformer = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize(IMAGE_SIZE),
-        # transforms.Normalize((0.5486, 0.4778, 0.4198),
-        #                      (0.2418, 0.2470, 0.2510))  # 全データで標準化
+        transforms.Normalize((0.5486, 0.4778, 0.4198),
+                             (0.2418, 0.2470, 0.2510))  # 全データで標準化
     ])
 
     img_t = img_transformer(img)
