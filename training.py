@@ -10,6 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import SGD
+from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 from sklearn.metrics import roc_auc_score
@@ -43,12 +45,12 @@ class TrainingApp:
         parser = argparse.ArgumentParser()
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=64,
+                            default=128,
                             type=int,
                             )
         parser.add_argument('--pretrained',
                             help='pretrain resnet model or not.',
-                            default=True,
+                            default=False,
                             type=bool,
                             )
         parser.add_argument('--num-workers',
@@ -80,6 +82,21 @@ class TrainingApp:
                             default=1e-4,
                             type=float,
                             )
+        parser.add_argument('--l-lambda',
+                            help='coefficient of l1, or l2 normalization',
+                            default=0.0,
+                            type=float,
+                            )
+        parser.add_argument('--norm-type',
+                            help='Select l1, l2, both',
+                            default='l2',
+                            type=str
+                            )
+        # parser.add_argument('--dropout-on',
+        #                     help='activate dropout or not',
+        #                     default=False,
+        #                     type=bool,
+        #                     )
         parser.add_argument('comment',
                             help='Comment suffix for wandb run.',
                             nargs='?',
@@ -93,19 +110,22 @@ class TrainingApp:
         self.val_writer = None
         self.totalTrainingSamples_count = 0
 
+        self.norm_type = self.cli_args.norm_type
+        self.l_lambda = self.cli_args.l_lambda
+
         self.use_cuda = torch.cuda.is_available()
         self.device = torch.device('cuda' if self.use_cuda else 'cpu')
 
         self.model = self.initModel()
         self.optimizer = self.initOptimizer()
+        self.scheduler = CosineAnnealingLR(
+            self.optimizer, T_max=self.cli_args.epochs, eta_min=1e-6)
 
     def initModel(self):
         model = ResNet18Wrapper(
             in_channels=3,
             pretrained=self.cli_args.pretrained,
         )
-
-        # 作成したモデルに対してファインチューニングするコードの追加
 
         # Fine tune : もしファインチューニングするパラメータが配列要素にあったら, そのパラメータ以外の重みの更新をOFF
         if self.cli_args.finetune_params:
@@ -124,7 +144,8 @@ class TrainingApp:
 
     def initOptimizer(self):
         return SGD(self.model.parameters(), lr=self.cli_args.learning_rate, momentum=0.99)
-        # return Adam(self.model.parameters())
+        # return optimizer = Adam(self.model.parameters(),
+        #                  lr=self.cli_args.learning_rate)
 
     def initTrainDl(self):
         train_ds = ImageDataset(dataType='trn')
@@ -199,6 +220,8 @@ class TrainingApp:
 
                 self.saveModel(epoch_ndx, score == best_score)
 
+            self.scheduler.step()
+
         if hasattr(self, 'trn_writer'):
             self.trn_writer.close()
             self.val_writer.close()
@@ -224,7 +247,7 @@ class TrainingApp:
                 batch_ndx,  # 何個目のバッチか
                 batch_tup,  # (image, label)
                 train_dl.batch_size,
-                trnMetrics_g  # 評価マスク(これから埋める)
+                trnMetrics_g,  # 評価マスク(これから埋める)
             )
 
             loss_var.backward()
@@ -283,7 +306,20 @@ class TrainingApp:
                   start_ndx:end_ndx] = probability_g[:, 1]  # 食料であると予測した確率
         metrics_g[METRICS_LOSS_NDX, start_ndx:end_ndx] = loss_g  # 損失
 
-        return loss_g.mean()  # バッチ平均した損失を返す
+        # L1, L2 正則化の設定
+        if self.norm_type == 'l1':
+            l_norm = sum(p.abs().sum() for p in self.model.parameters())
+        elif self.norm_type == 'l2':
+            l_norm = sum(p.pow(2).sum() for p in self.model.parameters())
+        elif self.norm_type == 'both':
+            l1_norm = sum(p.abs().sum() for p in self.model.parameters())
+            l2_norm = sum(p.pow(2).sum() for p in self.model.parameters())
+            l_norm = l1_norm + l2_norm
+        else:
+            print('normalization problem.')
+        print(f'norm: {l_norm}')
+
+        return loss_g.mean() + self.l_lambda * l_norm  # バッチ平均した損失を返す
 
     def logMetrics(self, epoch_ndx, mode_str, metrics_t, classificationThreshold=0.5):
         self.initTensorboardWriters()
