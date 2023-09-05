@@ -51,7 +51,7 @@ class TestApp:
                             )
         parser.add_argument('--batch-size',
                             help='Batch size to use for training',
-                            default=16,
+                            default=128,
                             type=int,
                             )
         parser.add_argument('--num-workers',
