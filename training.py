@@ -19,8 +19,9 @@ from sklearn.metrics import roc_auc_score
 from torch.utils.tensorboard import SummaryWriter
 
 from util.util import enumerateWithEstimate
+# from util.rocstar import roc_star_loss, epoch_update_gamma
 from dsets import ImageDataset
-from model import ResNet18Wrapper
+from model import ResNetWrapper
 
 from util.logconf import logging
 
@@ -97,6 +98,11 @@ class TrainingApp:
         #                     default=False,
         #                     type=bool,
         #                     )
+        # parser.add_argument('--use-rocstarLoss',
+        #                     help='use roc star loss as loss function',
+        #                     default=False,
+        #                     type=bool,
+        #                     )
         parser.add_argument('comment',
                             help='Comment suffix for wandb run.',
                             nargs='?',
@@ -122,16 +128,24 @@ class TrainingApp:
             self.optimizer, T_max=self.cli_args.epochs, eta_min=1e-6)
 
     def initModel(self):
-        model = ResNet18Wrapper(
+        model = ResNetWrapper(
             in_channels=3,
             pretrained=self.cli_args.pretrained,
         )
 
         # Fine tune : もしファインチューニングするパラメータが配列要素にあったら, そのパラメータ以外の重みの更新をOFF
-        if self.cli_args.finetune_params:
-            for name, param in model.named_parameters():
-                if name not in self.cli_args.finetune_params:
-                    param.required_grad = False
+        # if self.cli_args.finetune_params:
+        #     for name, param in model.named_parameters():
+        #         if name not in self.cli_args.finetune_params:
+        #             param.required_grad = False
+############### tmp ##########################################################
+        activate_weights = ['resnet50.fc.weight', 'resnet50.fc.bias']
+        for name, param in model.named_parameters():
+            if name not in activate_weights:
+                param.required_grad = False
+            else:
+                print(f'activate weiths: {name}')
+############################################################################
 
         if self.use_cuda:
             log.info('Using CUDA; {} devices'.format(
@@ -291,6 +305,15 @@ class TrainingApp:
 
         logits_g, probability_g = self.model(input_g)  # fc, Softmax
 
+        # if self.cli_args.use_rocstartLoss and :
+        #     loss_g = roc_star_loss(logits_g, label_g[:, 1], epoch_gamma)
+        # else:
+        #     loss_func = nn.CrossEntropyLoss(reduction='none')
+        #     loss_g = loss_func(
+        #         logits_g,
+        #         label_g[:, 1],
+        #     )
+
         loss_func = nn.CrossEntropyLoss(reduction='none')
         loss_g = loss_func(
             logits_g,
@@ -317,7 +340,7 @@ class TrainingApp:
             l_norm = l1_norm + l2_norm
         else:
             print('normalization problem.')
-        print(f'norm: {l_norm}')
+        # print(f'norm: {l_norm}')
 
         return loss_g.mean() + self.l_lambda * l_norm  # バッチ平均した損失を返す
 
