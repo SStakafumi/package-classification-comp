@@ -12,7 +12,6 @@ import pandas as pd
 
 import torch
 import torch.nn as nn
-from torch.optim import SGD
 from torch.utils.data import DataLoader
 
 from sklearn.metrics import roc_auc_score
@@ -21,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from util.util import enumerateWithEstimate
 from dsets import ImageDataset
-from model import ResNet18Wrapper
+from model import ResNetWrapper
 
 from util.logconf import logging
 
@@ -29,8 +28,6 @@ log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
 # log.setLevel(logging.INFO)
 log.setLevel(logging.DEBUG)
-
-IMAGE_SIZE = (256, 256)
 
 
 class TestApp:
@@ -84,7 +81,7 @@ class TestApp:
 
     # (1)
     def initModel(self):
-        model = ResNet18Wrapper(
+        model = ResNetWrapper(
             in_channels=3,
             pretrained=False
         )
