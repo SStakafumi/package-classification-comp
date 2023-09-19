@@ -1,13 +1,16 @@
+from util.logconf import logging
 import collections
 import copy
 import datetime
 import gc
 import time
+import torch
+import random
 
 # import torch
 import numpy as np
+random.seed(1)
 
-from util.logconf import logging
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
 # log.setLevel(logging.INFO)
@@ -153,3 +156,23 @@ try:
     from torch.hub import load_state_dict_from_url
 except ImportError:
     from torch.utils.model_zoo import load_url as load_state_dict_from_url
+
+
+class RandomRotation90:
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, x):
+        if random.random() < self.p:
+            i = random.randint(1, 3)
+
+        # if isinstance(x, Image.Image):
+        #     x = transforms.RandomRotation((90*i, 90*i), expand=True)(x)
+
+            if isinstance(x, torch.Tensor):
+                x = torch.rot90(x, i, [1, 2])
+
+            else:
+                raise TypeError(f'{type(x)} is unexpected type.')
+
+        return x
